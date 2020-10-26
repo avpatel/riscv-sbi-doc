@@ -618,6 +618,294 @@ state of the hart at the time of return value verification.
 | sbi_hart_get_status      	|           2 |     0x48534D
 |===
 
+== Performance Monitoring Unit Extension, Extension ID: 0x504D55 (PMU)
+
+The RISC-V M-mode hardware performance counters such as MCYCLE, MINSTRET,
+and MHPMCOUNTERx CSRs are accessible as read-only from S-mode and U-mode
+using CYCLE, INSTRET, and HPMCOUNTERx CSRs. These performance counters can
+only be started, stopped, or configured using MCOUNTINHIBIT and MHPMEVENTx
+CSRs in M-mode.
+
+A RISC-V implementation generally supports monitoring of various hardware
+events using a limited number of hardware performance counters which are
+up to 64 bits wide. In addition to the hardware performance counters, a SBI
+implementation can provide software performance counters which can monitor
+software events such as number of misaligned load/store instructions, number
+of RFENCEs, number of IPIs, etc. The software counters are always XLEN bits
+wide but not wider than 64 bits.
+
+.The SBI PMU extension provides:
+1. An interface for S-mode (or VS-mode) software to discover and configure
+   per-HART hardware/software counters
+2. A typical "perf" (https://en.wikipedia.org/wiki/Perf_(Linux)) compatible
+   interface for hardware/software performance counters and events
+3. Full access to microarchitecture's raw event encodings
+
+To define SBI PMU extension calls, we first define important entities
+`counter_idx`, `event_idx`, and `event_info`. The `counter_idx` is a
+logical number assigned to each hardware/software counter. The `event_idx`
+represents a hardware/software event whereas the `event_info` represents
+additional configuration or parameters for the hardware/software event.
+
+The event_idx is 20bits wide number encoded as follows:
+[source, C]
+----
+    event_idx[19:16] = type
+    event_idx[15:0] = code
+----
+
+=== Event: Hardware general events (Type #0)
+
+The `event_idx.type` (i.e. *event type*) should be `0x0` for all hardware
+general events and each hardware general event is identified by an unqiue
+`event_idx.code` (i.e. *event code*) described in table below:
+
+[cols="<,,>",options="header,compact"]
+|===
+| General Event Name                 | Event Code | Description
+| SBI_PMU_HW_NO_EVENT                |          0 | Unused event because event_idx cannot be zero
+| SBI_PMU_HW_CPU_CYCLES              |          1 | Event for each CPU cycle
+| SBI_PMU_HW_INSTRUCTIONS            |          2 | Event for each completed instruction
+| SBI_PMU_HW_CACHE_REFERENCES        |          3 | Event for cache hit
+| SBI_PMU_HW_CACHE_MISSES            |          4 | Event for cache miss
+| SBI_PMU_HW_BRANCH_INSTRUCTIONS     |          5 | Event for a branch instruction
+| SBI_PMU_HW_BRANCH_MISSES           |          6 | Event for a branch misprediction
+| SBI_PMU_HW_BUS_CYCLES              |          7 | Event for each BUS cycle
+| SBI_PMU_HW_STALLED_CYCLES_FRONTEND |          8 | Event for a stalled cycle in microarchitecture frontend
+| SBI_PMU_HW_STALLED_CYCLES_BACKEND  |          9 | Event for a stalled cycle in microarchitecture backend
+| SBI_PMU_HW_REF_CPU_CYCLES          |         10 | Event for each reference CPU cycle
+| SBI_PMU_HW_MISALIGNED_LOAD         |         11 | Event for misaligned load instruction
+| SBI_PMU_HW_MISALIGNED_STORE        |         12 | Event for misaligned store instruction
+|===
+
+*NOTE:* the `event_info` (i.e. *event info*) is unused for hardware general
+events and all non-zero values of `event_info` are reserved for future use.
+
+=== Event: Hardware cache events (Type #1)
+
+The `event_idx.type` (i.e. *event type*) should be `0x1` for all hardware
+cache events and each hardware cache event is identified by an unqiue
+`event_idx.code` (i.e. *event code*) which is encoded as follows:
+
+[source, C]
+----
+    event_idx.code[15:3] = cache_id
+    event_idx.code[2:1] = op_id
+    event_idx.code[0:0] = result_id
+----
+
+Below tables show possible values of: `event_idx.code.cache_id` (i.e.
+*cache event id*), `event_idx.code.op_id` (i.e. *cache operation id*)
+and `event_idx.code.result_id` (i.e. *cache result id*).
+
+[cols="<,,>",options="header,compact"]
+|===
+| Cache Event Name      | Cache Event ID | Description
+| SBI_PMU_HW_CACHE_L1D  |              0 | Level1 data cache event
+| SBI_PMU_HW_CACHE_L1I  |              1 | Level1 instruction cache event
+| SBI_PMU_HW_CACHE_LL   |              2 | Last level cache event
+| SBI_PMU_HW_CACHE_DTLB |              3 | Data TLB event
+| SBI_PMU_HW_CACHE_ITLB |              4 | Instruction TLB event
+| SBI_PMU_HW_CACHE_BPU  |              5 | Branch predictor unit event
+| SBI_PMU_HW_CACHE_NODE |              6 | NUMA node cache event
+|===
+
+[cols="<,,>",options="header,compact"]
+|===
+| Cache Operation Name         | Cache Operation ID | Description
+| SBI_PMU_HW_CACHE_OP_READ     |                  0 | Read cache line
+| SBI_PMU_HW_CACHE_OP_WRITE    |                  1 | Write cache line
+| SBI_PMU_HW_CACHE_OP_PREFETCH |                  2 | Prefetch cache line
+|===
+
+[cols="<,,>",options="header,compact"]
+|===
+| Cache Result Name              | Cache Result ID | Description
+| SBI_PMU_HW_CACHE_RESULT_ACCESS |               0 | Cache access
+| SBI_PMU_HW_CACHE_RESULT_MISS   |               1 | Cache miss
+|===
+
+*NOTE:* the `event_info` (i.e. *event info*) is unused for hardware cache
+events and all non-zero values of `event_info` are reserved for future use.
+
+=== Event: Hardware raw events (Type #2)
+
+The `event_idx.type` (i.e. *event type*) should be `0x2` for all hardware
+raw events and `event_idx.code` (i.e. *event code*) should be zero. The
+`event_info` parameter of `sbi_pmu_counter_config_matching()` call (described
+below) should have the non-zero raw event value to be programmed in the
+MHPMEVENTx CSR.
+
+=== Event: Software events (Type #15)
+
+The `event_idx.type` (i.e. *event type*) should be `0xf` for all software
+events and each software event is identified by an unqiue `event_idx.code`
+(i.e. *event code*) described in table below:
+
+[cols="<,,>",options="header,compact"]
+|===
+| Software Event Name                  | Event Code | Description
+| SBI_PMU_SW_MISALIGNED_LOAD           |          0 | Misaligned load trap event
+| SBI_PMU_SW_MISALIGNED_STORE          |          1 | Misaligned store trap event
+| SBI_PMU_SW_ACCESS_LOAD               |          2 | Load access trap event
+| SBI_PMU_SW_ACCESS_STORE              |          3 | Store access trap event
+| SBI_PMU_SW_ILLEGAL_INSN              |          4 | Illegal instruction trap event
+| SBI_PMU_SW_SET_TIMER                 |          5 | Set timer event
+| SBI_PMU_SW_IPI_SENT                  |          6 | Sent IPI to other HART event
+| SBI_PMU_SW_IPI_RECEIVED              |          7 | Received IPI from other HART event
+| SBI_PMU_SW_FENCE_I_SENT              |          8 | Sent FENCE.I request to other HART event
+| SBI_PMU_SW_FENCE_I_RECEIVED          |          9 | Received FENCE.I request from other HART event
+| SBI_PMU_SW_SFENCE_VMA_SENT           |         10 | Sent SFENCE.VMA request to other HART event
+| SBI_PMU_SW_SFENCE_VMA_RECEIVED       |         11 | Received SFENCE.VMA request from other HART event
+| SBI_PMU_SW_SFENCE_VMA_ASID_SENT      |         12 | Sent SFENCE.VMA with ASID request to other HART event
+| SBI_PMU_SW_SFENCE_VMA_ASID_RECEIVED  |         13 | Received SFENCE.VMA with ASID request from other HART event
+| SBI_PMU_SW_HFENCE_GVMA_SENT          |         14 | Sent HFENCE.GVMA request to other HART event
+| SBI_PMU_SW_HFENCE_GVMA_RECEIVED      |         15 | Received HFENCE.GVMA request from other HART event
+| SBI_PMU_SW_HFENCE_GVMA_VMID_SENT     |         16 | Sent HFENCE.GVMA with VMID request to other HART event
+| SBI_PMU_SW_HFENCE_GVMA_VMID_RECEIVED |         17 | Received HFENCE.GVMA with VMID request from other HART event
+| SBI_PMU_SW_HFENCE_VVMA_SENT          |         18 | Sent HFENCE.VVMA request to other HART event
+| SBI_PMU_SW_HFENCE_VVMA_RECEIVED      |         19 | Received HFENCE.VVMA request from other HART event
+| SBI_PMU_SW_HFENCE_VVMA_ASID_SENT     |         20 | Sent HFENCE.VVMA with ASID request to other HART event
+| SBI_PMU_SW_HFENCE_VVMA_ASID_RECEIVED |         21 | Received HFENCE.VVMA with ASID request from other HART event
+|===
+
+*NOTE:* the `event_info` (i.e. *event info*) is unused for software events
+and all non-zero values of `event_info` are reserved for future use.
+
+=== Function: Get number of counters (ID #0)
+
+[source, C]
+----
+struct sbiret sbi_pmu_num_counters()
+----
+
+*Returns* the number of counters (both hardware and software) in sbiret.value
+and always returns `SBI_SUCCESS` in sbiret.error.
+
+=== Function: Get details of a counter (ID #1)
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_get_info(unsigned long counter_idx)
+----
+
+Get details about the specified counter such as underlying CSR number,
+width of the counter, type of counter hardware/software, etc.
+
+The `counter_info` returned by this SBI call is encoded as follows:
+[source, C]
+----
+    counter_info[11:0] = CSR (12bit CSR number)
+    counter_info[17:12] = Width (One less than number of bits in CSR)
+    counter_info[XLEN-2:18] = Reserved for future use
+    counter_info[XLEN-1] = Type (0 = hardware and 1 = software)
+----
+
+If `counter_info.type == 0x1` then `counter_info.csr` and `counter_info.width`
+should be ignored.
+
+*Returns* the `counter_info` described above in sbiret.value and returns
+one of the following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | `counter_info` read successfully.
+| SBI_ERR_INVALID_PARAM     | `counter_idx` points to an invalid counter.
+|===
+
+=== Function: Find and configure a matching counter (ID #2)
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_config_matching(unsigned long counter_idx_base,
+					      unsigned long counter_idx_mask,
+					      unsigned long event_idx,
+					      unsigned long event_info)
+----
+
+Find and configure a counter from a set of counters which is not started
+(or enabled) and can monitor the specified event. The `counter_idx_base`
+and `counter_idx_mask` parameters represent the set of counters whereas
+the `event_idx` and `event_info` represent the event to be monitored.
+
+*Returns* the `counter_idx` in sbiret.value upon success and returns one
+of the following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | counter found and configured successfully.
+| SBI_ERR_INVALID_PARAM     | set of counters has an invalid counter.
+| SBI_ERR_NOT_SUPPORTED     | None of the counters can monitor specified event.
+|===
+
+=== Function: Read a software counter (ID #3)
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_soft_read(unsigned long counter_idx)
+----
+
+Provide the current value of a software counter.
+
+*Returns* the software counter value in sbiret.value and returns one of the
+following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | software counter read successfully.
+| SBI_ERR_INVALID_PARAM     | `counter_idx` points to a hardware counter or an invalid counter.
+|===
+
+=== Function: Start a counter (ID #4)
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_start(unsigned long counter_idx, uint64_t initial_value)
+----
+
+Start or enable the specified counter on the calling HART with the specified
+initial value.
+
+*Returns* one of the following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | counter started successfully.
+| SBI_ERR_INVALID_PARAM     | `counter_idx` points to an invalid counter.
+| SBI_ERR_ALREADY_AVAILABLE | counter already started.
+|===
+
+=== Function: Stop a counter (ID #5)
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_stop(unsigned long counter_idx)
+----
+
+Stop or disable the specified counter on the calling HART.
+
+*Returns* one of the following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | counter stopped successfully.
+| SBI_ERR_INVALID_PARAM     | `counter_idx` points to an invalid counter.
+| SBI_ERR_ALREADY_AVAILABLE | counter already stopped.
+|===
+
+=== Function Listing
+
+[cols="<,,>",options="header,compact"]
+|===
+| Function Name                   | Function ID | Extension ID
+| sbi_pmu_num_counters            |           0 |     0x504D55
+| sbi_pmu_counter_get_info        |           1 |     0x504D55
+| sbi_pmu_counter_config_matching |           2 |     0x504D55
+| sbi_pmu_counter_soft_read       |           3 |     0x504D55
+| sbi_pmu_counter_start           |           4 |     0x504D55
+| sbi_pmu_counter_stop            |           5 |     0x504D55
+|===
+
 == Experimental SBI Extension Space, Extension IDs 0x08000000 through 0x08FFFFFF
 
 No management.
