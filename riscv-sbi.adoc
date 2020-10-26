@@ -618,6 +618,261 @@ state of the hart at the time of return value verification.
 | sbi_hart_get_status      	|           2 |     0x48534D
 |===
 
+== Performance Monitoring Unit Extension, Extension ID: 0x504D55 (PMU)
+
+The RISC-V M-mode HARDWARE performance counters such as MCYCLE, MINSTRET,
+and MHPMCOUNTERx CSRs are accessible as read-only from S-mode and U-mode
+using CYCLE, INSTRET, and HPMCOUNTERx CSRs. These performance counters can
+only be started, stopped, or configured using MCOUNTINHIBIT and MHPMEVENTx
+CSRs in M-mode.
+
+A RISC-V implementation generally supports monitoring of various HARDWARE
+events using a limited number of HARDWARE performance counters which are
+upto 64 bits wide. In addition to the HARDWARE performance counters, a SBI
+implementation can provide SOFTWARE performance counters which can monitor
+SOFTWARE events such as number of misaligned load/store instructions, number
+of RFENCEs, number of IPIs, etc. The SOFTWARE counters are always XLEN bits
+wide but not wider than 64 bits.
+
+The SBI PMU extension will help S-mode (or VS-mode) SOFTWARE to discover
+and configure per-HART HARDWARE/SOFTWARE counters. Using SBI PMU extension,
+a SBI implementation will provide a standardized view of HARDWARE/SOFTWARE
+counters and events to S-mode (or VS-mode) SOFTWARE.
+
+To define SBI PMU extension calls, we first define important entities
+`counter_idx`, `event_idx`, and `event_info`. The `counter_idx` is a
+logical number assigned to each HARDWARE/SOFTWARE counter. The `event_idx`
+represents a HARDWARE/SOFTWARE event whereas the `event_info` represents
+additional configuration or parameters for the HARDWARE/SOFTWARE event.
+
+The event_idx is 20bits wide number encoded as follows:
+[source, C]
+----
+    event_idx[19:16] = type
+    event_idx[15:0] = code
+----
+
+=== PMU HARDWARE GENERAL events
+
+The `event_idx.type == 0x1` for HARDWARE GENERAL events. For HARDWARE GENERAL
+event, all non-zero values of `event_info` are reserved for future use whereas
+the `event_idx.code` can be one of the following values:
+[source, C]
+----
+    enum sbi_pmu_hw_id {
+        SBI_PMU_HW_CPU_CYCLES              = 0,
+        SBI_PMU_HW_INSTRUCTIONS            = 1,
+        SBI_PMU_HW_CACHE_REFERENCES        = 2,
+        SBI_PMU_HW_CACHE_MISSES            = 3,
+        SBI_PMU_HW_BRANCH_INSTRUCTIONS     = 4,
+        SBI_PMU_HW_BRANCH_MISSES           = 5,
+        SBI_PMU_HW_BUS_CYCLES              = 6,
+        SBI_PMU_HW_STALLED_CYCLES_FRONTEND = 7,
+        SBI_PMU_HW_STALLED_CYCLES_BACKEND  = 8,
+        SBI_PMU_HW_REF_CPU_CYCLES          = 9,
+        SBI_PMU_HW_MAX,                    /* non-SBI */
+    };
+----
+
+=== PMU HARDWARE CACHE events
+
+The `event_idx.type == 0x2` for HARDWARE CACHE events. For HARDWARE CACHE
+event, all non-zero values of `event_info` are reserved for future use whereas
+the `event_idx.code` is encoded as follows:
+[source, C]
+----
+    event_idx.code[15:3] = cache_id
+    event_idx.code[2:1] = op_id
+    event_idx.code[0:0] = result_id
+
+    enum sbi_pmu_hw_cache_id {
+        SBI_PMU_HW_CACHE_L1D  = 0,
+        SBI_PMU_HW_CACHE_L1I  = 1,
+        SBI_PMU_HW_CACHE_LL   = 2,
+        SBI_PMU_HW_CACHE_DTLB = 3,
+        SBI_PMU_HW_CACHE_ITLB = 4,
+        SBI_PMU_HW_CACHE_BPU  = 5,
+        SBI_PMU_HW_CACHE_NODE = 6,
+        SBI_PMU_HW_CACHE_MAX, /* non-SBI */
+    };
+
+    enum sbi_pmu_hw_cache_op_id {
+        SBI_PMU_HW_CACHE_OP_READ     = 0,
+        SBI_PMU_HW_CACHE_OP_WRITE    = 1,
+        SBI_PMU_HW_CACHE_OP_PREFETCH = 2,
+        SBI_PMU_HW_CACHE_OP_MAX,     /* non-SBI */
+    };
+
+    enum sbi_pmu_hw_cache_op_result_id {
+        SBI_PMU_HW_CACHE_RESULT_ACCESS = 0,
+        SBI_PMU_HW_CACHE_RESULT_MISS   = 1,
+        SBI_PMU_HW_CACHE_RESULT_MAX,   /* non-SBI */
+    };
+----
+
+=== PMU HARDWARE RAW events
+
+The `event_idx.type == 0x3` for HARDWARE RAW events. For HARDWARE RAW event,
+the `event_idx.code` should be zero and the `event_info` parameter passed to
+`sbi_pmu_counter_config_matching()` call (described below) will have the
+RAW event value to be programmed in the MHPMEVENTx CSR.
+
+=== PMU SOFTWARE events
+
+The `event_idx.type == 0xf` for SOFTWARE events. For SOFTWARE event, all
+non-zero values of `event_info` are reserved for future use whereas the
+`event_idx.code` can be one of the following values:
+[source, C]
+----
+    enum sbi_pmu_sw_id {
+        SBI_PMU_SW_MISALIGNED_LOAD           = 0,
+        SBI_PMU_SW_MISALIGNED_STORE          = 1,
+        SBI_PMU_SW_ILLEGAL_INSN              = 2,
+        SBI_PMU_SW_SET_TIMER                 = 3,
+        SBI_PMU_SW_IPI_SENT                  = 4,
+        SBI_PMU_SW_IPI_RECEIVED              = 5,
+        SBI_PMU_SW_FENCE_I_SENT              = 6,
+        SBI_PMU_SW_FENCE_I_RECEIVED          = 7,
+        SBI_PMU_SW_SFENCE_VMA_SENT           = 8,
+        SBI_PMU_SW_SFENCE_VMA_RECEIVED       = 9,
+        SBI_PMU_SW_SFENCE_VMA_ASID_SENT      = 10,
+        SBI_PMU_SW_SFENCE_VMA_ASID_RECEIVED  = 11,
+        SBI_PMU_SW_HFENCE_GVMA_SENT          = 12,
+        SBI_PMU_SW_HFENCE_GVMA_RECEIVED      = 13,
+        SBI_PMU_SW_HFENCE_GVMA_VMID_SENT     = 14,
+        SBI_PMU_SW_HFENCE_GVMA_VMID_RECEIVED = 15,
+        SBI_PMU_SW_HFENCE_VVMA_SENT          = 16,
+        SBI_PMU_SW_HFENCE_VVMA_RECEIVED      = 17,
+        SBI_PMU_SW_HFENCE_VVMA_ASID_SENT     = 18,
+        SBI_PMU_SW_HFENCE_VVMA_ASID_RECEIVED = 19,
+        SBI_PMU_SW_MAX,                   /* non-SBI */
+    };
+----
+
+=== PMU Functions
+
+[source, C]
+----
+struct sbiret sbi_pmu_num_counters()
+----
+
+*Returns* the number of counters (both HARDWARE and SOFTWARE) in sbiret.value
+and always returns `SBI_SUCCESS` in sbiret.error.
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_get_info(unsigned long counter_idx)
+----
+
+This SBI call provides details about the specified counter such as underlying
+CSR number, width of the counter, type of counter HARDWARE/SOFTWARE, etc.
+
+The `counter_info` returned by this SBI call is encoded as follows:
+[source, C]
+----
+    counter_info[11:0] = CSR (12bit CSR number)
+    counter_info[19:12] = Width (number of bits)
+    counter_info[20] = Type (0 = HARDWARE and 1 = SOFTWARE)
+    counter_info[XLEN-1:21] = Reserved for future use
+----
+
+If `counter_info.type == 0x1` then `counter_info.csr` should be ignored
+and `counter_info.width` is assumed to be XLEN.
+
+*Returns* the `counter_info` described above in sbiret.value and returns
+one of the following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | `counter_info` read successfully.
+| SBI_ERR_INVALID_PARAM     | `counter_idx` points to an invalid counter.
+|===
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_config_matching(unsigned long counter_idx_base,
+					      unsigned long counter_idx_mask,
+					      unsigned long event_idx,
+					      unsigned long event_info)
+----
+
+This SBI call will find and configure a counter from a set of counters
+which can monitor the specified event. The `counter_idx_base` and
+`counter_idx_mask` parameters represent the set of counters whereas
+the `event_idx` and `event_info` represent the event to be monitored.
+
+*Returns* the `counter_idx` in sbiret.value upon success and returns one
+of the following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | counter found and configured successfully.
+| SBI_ERR_INVALID_PARAM     | set of counters has an invalid counter.
+| SBI_ERR_NOT_SUPPORTED     | None of the counters can monitor specified event.
+|===
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_soft_read(unsigned long counter_idx)
+----
+
+This SBI calls provides the current value of a SOFTWARE counter.
+
+*Returns* the SOFTWARE counter value in sbiret.value and returns one of the
+following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | SOFTWARE counter read successfully.
+| SBI_ERR_INVALID_PARAM     | `counter_idx` points to a HARDWARE counter or an invalid counter.
+|===
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_start(unsigned long counter_idx, uint64_t initial_value)
+----
+
+This SBI call will start/enable the specified counter on the calling HART
+with specified initial value.
+
+*Returns* one of the following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | counter started successfully.
+| SBI_ERR_INVALID_PARAM     | `counter_idx` points to an invalid counter.
+| SBI_ERR_ALREADY_AVAILABLE | counter already started.
+|===
+
+[source, C]
+----
+struct sbiret sbi_pmu_counter_stop(unsigned long counter_idx)
+----
+
+This SBI call will stop/disable the specified counter on the calling HART.
+
+*Returns* one of the following possible SBI error codes in sbiret.error.
+[cols="<,>",options="header,compact"]
+|===
+| Error code                | Description
+| SBI_SUCCESS               | counter stopped successfully.
+| SBI_ERR_INVALID_PARAM     | `counter_idx` points to an invalid counter.
+| SBI_ERR_ALREADY_AVAILABLE | counter already stopped.
+|===
+
+=== PMU Function Listing
+
+[cols="<,,>",options="header,compact"]
+|===
+| Function Name                   | Function ID | Extension ID
+| sbi_pmu_num_counters            |           0 |     0x504D55
+| sbi_pmu_counter_get_info        |           1 |     0x504D55
+| sbi_pmu_counter_config_matching |           2 |     0x504D55
+| sbi_pmu_counter_soft_read       |           3 |     0x504D55
+| sbi_pmu_counter_start           |           4 |     0x504D55
+| sbi_pmu_counter_stop            |           5 |     0x504D55
+|===
+
 == Experimental SBI Extension Space, Extension IDs 0x08000000 through 0x08FFFFFF
 
 No management.
