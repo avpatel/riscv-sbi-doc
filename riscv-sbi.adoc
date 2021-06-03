@@ -27,6 +27,10 @@ https://creativecommons.org/licenses/by/4.0/.
 [preface]
 == Change Log
 
+=== Version 0.4-rc0
+
+* Added direct memory access synchronize extension
+
 === Version 0.3-rc0
 
 * Improved document styling and naming conventions
@@ -1548,6 +1552,97 @@ The possible error codes returned in `sbiret.error` are shown in the
 | sbi_pmu_counter_start           | 0.3         | 3   | 0x504D55
 | sbi_pmu_counter_stop            | 0.3         | 4   | 0x504D55
 | sbi_pmu_counter_fw_read         | 0.3         | 5   | 0x504D55
+|===
+
+== Direct Memory Access Synchronize Extension (EID #0x4453594e "DSYN")
+
+A RISC-V platform will generally have direct memory access
+(https://en.wikipedia.org/wiki/Direct_memory_access[DMA]) capable devices.
+These DMA capable devices can sometimes be non-coherent with HART caches (i.e.
+I/O non-coherent) hence requiring explicit cache flush and/or invalidate from
+HART to synchronize memory with the DMA capable device. The SBI direct memory
+access synchronize (DSYN) extension is an interface for supervisor-mode to
+explicitly synchronize memory region with assistance from the machine-mode
+(or hypervisor-mode).
+
+=== Function: DMA Synchronize (FID #0)
+
+[source, C]
+----
+struct sbiret sbi_dma_synchronize(unsigned long addr, unsigned long size,
+				   unsigned long direction)
+----
+
+Synchronize a memory region for non-coherent DMA capable devices based on
+`addr`, `size` and `direction` paramenters. The `addr` and `size` parameter
+represent the physical address and size of memory region whereas `direction`
+parameter represents the direction of synchronization with possible values
+shown in <<table_dma_sync_direction_list>> below.
+
+[#table_dma_sync_direction_list]
+.DMA Synchronize Directions
+[cols="4,1,5", width=95%, align="center", options="header"]
+|===
+| Direction Name             | Value | Description
+| SBI_DMA_SYNC_BIDIRECTIONAL |     0 | Data direction isn't known. +
+                                       +
+                                       The DMA synchronization in this
+                                       direction must be done: +
+                                       * once before the memory region is
+                                         handed off to the device. +
+                                       * once before the memory region is
+                                         accessed after being used by the
+                                         device.
+| SBI_DMA_SYNC_TO_DEVICE     |     1 | Data is going from the memory region
+                                       to the device. +
+                                       +
+                                       The DMA synchronization in this
+                                       direction must be done after the last
+                                       modification of the memory region by
+                                       the supervisor-mode and before region
+                                       is handed off to the device.
+| SBI_DMA_SYNC_FROM_DEVICE   |     2 | Data is coming from the device to
+                                       the memory region. +
+                                       +
+                                       The DMA synchronization in this
+                                       direction must be before the
+                                       supervisor-mode accesses memory region
+                                       that may have been updated by the
+                                       device.
+| SBI_DMA_SYNC_NONE          |     3 | No data direction. +
+                                       +
+                                       This is only for debugging and does
+                                       not do any DMA synchronization.
+| *RESERVED*                 |   > 3 | Reserved for future use
+|===
+
+The possible error codes returned in `sbiret.error` are shown in the
+<<table_dma_sync_errors>> below.
+
+[#table_dma_sync_errors]
+.DMA Synchronize Errors
+[cols="1,2", width=100%, align="center", options="header"]
+|===
+| Error code              | Description
+| SBI_SUCCESS             | memory synchronized successfully.
+| SBI_ERR_INVALID_PARAM   | `direction` is not valid.
+| SBI_ERR_INVALID_ADDRESS | memory region pointed by `addr` and `size`
+                            parameter is not valid possibly due to
+                            following reasons: +
+                            * It is not a valid physical address range. +
+                            * The memory address range is prohibited by
+                              PMP to access in supervisor-mode.
+| SBI_ERR_FAILED          | memory synchroinzation failed for unknown reasons.
+|===
+
+=== Function Listing
+
+[#table_dsyn_function_list]
+.DSYN Function List
+[cols="5,2,1,2", width=80%, align="center", options="header"]
+|===
+| Function Name                   | SBI Version | FID | EID
+| sbi_dma_synchronize             | 0.4         | 0   | 0x4453594e
 |===
 
 == Experimental SBI Extension Space (EIDs #0x08000000 - #0x08FFFFFF)
